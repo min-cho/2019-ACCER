@@ -1,0 +1,145 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Apr 11 01:04:17 2019
+@author: cho
+main referece : https://keras.io/getting-started/functional-api-guide/ "Multi-input and multi-output models"
+"""
+import os
+import matplotlib.pyplot as plt
+import keras
+import numpy as np
+import tensorflow as tf
+from keras.models import Sequential, Model
+from keras.layers import Input, LSTM, Dense, add
+from keras.layers import Activation, TimeDistributed, RepeatVector, Dropout
+from keras.layers.normalization import BatchNormalization
+from keras.utils.vis_utils import plot_model
+
+np.random.seed(777)
+os.chdir('C:\\Users\\cho\\Desktop\\python')
+
+timesteps = seq_length = 7
+gongju_dim = 9  #From RAW DATA
+buyeo_dim= 8    #From RAW DATA
+chl_min = 0.2     #From RAW DATA
+chl_max = 170.7   #From RAW DATA
+
+
+#############################################################################################################
+#### DATA Preparation ####
+
+tseq_all = np.loadtxt('tseq_all.csv', delimiter=',')  
+np.random.shuffle(tseq_all)
+
+data_X1=tseq_all[:,0:63]
+data_X2=tseq_all[:,63:119]
+data_Y=tseq_all[:,119:126]
+data_aux=tseq_all[:,126:148]
+
+
+# split to train and testing
+train_size = int(len(data_Y) * 0.6)  #568
+val_size=int(len(data_Y)*0.2)        #189
+nontest_size=train_size+val_size
+test_size = len(data_Y) - train_size -val_size     #190
+
+
+trainX1, testX1 = np.array(data_X1[0:train_size]), np.array(data_X1[nontest_size:len(data_X2)])
+trainX2, testX2 = np.array(data_X2[0:train_size]), np.array(data_X2[nontest_size:len(data_X2)])
+trainaux, testaux = np.array(data_aux[0:train_size]), np.array(data_aux[nontest_size:len(data_X2)])
+trainY, testY = np.array(data_Y[0:train_size]), np.array(data_Y[nontest_size:len(data_Y)])
+
+valX1=np.array(data_X1[train_size:nontest_size])
+valX2=np.array(data_X2[train_size:nontest_size])
+valaux=np.array(data_aux[train_size:nontest_size])
+valY=np.array(data_Y[train_size:nontest_size])
+
+### RESHPAE THE DATA  to LSTM
+trainX1=np.reshape(trainX1,(train_size,timesteps,gongju_dim))
+trainX2=np.reshape(trainX2,(train_size,timesteps,buyeo_dim))
+trainaux=np.reshape(trainaux,(train_size,timesteps,3))
+trainY=np.reshape(trainY,(train_size,7))
+
+testX1=np.reshape(testX1,(test_size,timesteps,gongju_dim))
+testX2=np.reshape(testX2,(test_size,timesteps,buyeo_dim))
+testaux=np.reshape(testaux,(test_size,timesteps,3))
+testY=np.reshape(testY,(test_size,7))
+
+valX1=np.reshape(valX1,(val_size,timesteps,gongju_dim))
+valX2=np.reshape(valX2,(val_size,timesteps,buyeo_dim))
+valaux=np.reshape(valaux,(val_size,timesteps,3))
+valY=np.reshape(valY,(val_size,7))
+
+
+###########################################################################################################
+
+
+#encoder_a = Sequential()
+#encoder_a.add(LSTM(32, input_shape=(timesteps, gongju_dim), return_sequences=True))
+
+
+input_g= Input(shape=(timesteps,gongju_dim))
+encoder_g = LSTM(32)(input_g)
+
+input_b= Input(shape=(timesteps,buyeo_dim))
+encoder_b = LSTM(32)(input_b)
+#buyeo_auxout = Dense(7, activation='linear')(encoder_b)
+
+input_aux= Input(shape=(timesteps,3))
+encoder_aux = LSTM(32)(input_aux)
+
+merging= keras.layers.add([encoder_g,encoder_b,encoder_aux])
+dense_a=Dense(64, activation='relu')(merging)
+dense_b=Dense(7, activation='linear')(dense_a)
+
+model=Model(inputs=[input_g,input_b,input_aux], outputs=[dense_b])
+model.compile(loss='mean_squared_error', optimizer='adam')
+model.summary()
+
+
+###
+# Store model graph in png # (Error occurs on in python interactive shell)
+#plot_model(model, to_file=os.path.basename(__file__) + '.png', show_shapes=True)
+#print(trainX.shape, trainY.shape)
+
+hist=model.fit([trainX1, trainX2, trainaux], trainY, epochs=10,validation_data=([valX1,valX2,valaux], valY))
+
+# make predictions
+testPredict = model.predict([testX1,testX2,testaux])
+
+# PLOT with inverse values
+plt.plot(testY*(chl_max-chl_min)+chl_min)
+plt.plot(testPredict*(chl_max-chl_min)+chl_min)
+plt.legend(['True', 'Predict'], loc='upper left')
+plt.ylabel('Concentration of chl-a (mg/m3)')
+plt.xlabel('Days')
+plt.show()
+
+
+# 5. 학습과정 살펴보기
+plt.plot(hist.history['loss'])
+plt.plot(hist.history['val_loss'])
+plt.ylim(0.0, 0.03)
+plt.ylabel('loss')
+plt.xlabel('epoch')
+plt.legend(['train', 'val'], loc='upper left')
+plt.show()
+
+
+# 6. 모델 평가하기 - RMSE
+trainScore = model.evaluate([trainX1,trainX2,trainaux], trainY, verbose=0) ** (.5)
+model.reset_states()
+print('Train Score: ', trainScore)
+valScore = model.evaluate([valX1,valX2,valaux], valY, verbose=0) ** (.5)
+model.reset_states()
+print('Validataion Score: ', valScore)
+testScore = model.evaluate([testX1,testX2,testaux], testY, verbose=0) ** (.5)
+model.reset_states()
+print('Test Score: ', testScore)
+
+
+## 레이어 구조 시각화
+from IPython.display import SVG
+from keras.utils.vis_utils import model_to_dot
+SVG(model_to_dot(model, show_shapes=True).create(prog='dot', format='svg'))
+
